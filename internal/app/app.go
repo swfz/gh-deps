@@ -17,7 +17,7 @@ type App struct {
 
 // New creates a new application instance
 func New(config *Config) (*App, error) {
-	client, err := api.NewClient(config.Verbose)
+	client, err := api.NewClient(config.Verbose, config.SkipChecks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
@@ -36,14 +36,24 @@ func (a *App) Run(ctx context.Context) error {
 	// Fetch PRs based on target type (org vs user)
 	if a.config.IsOrganization {
 		if a.config.Verbose {
-			fmt.Printf("Fetching dependency PRs from organization: %s\n", a.config.Target)
+			limitMsg := "all repositories"
+			if a.config.Limit > 0 {
+				limitMsg = fmt.Sprintf("up to %d repositories", a.config.Limit)
+			}
+			fmt.Printf("Fetching dependency PRs from organization: %s (%s)\n",
+				a.config.Target, limitMsg)
 		}
-		prs, err = a.client.FetchOrgPullRequests(ctx, a.config.Target)
+		prs, err = a.client.FetchOrgPullRequests(ctx, a.config.Target, a.config.Limit)
 	} else {
 		if a.config.Verbose {
-			fmt.Printf("Fetching dependency PRs from user: %s\n", a.config.Target)
+			limitMsg := "all repositories"
+			if a.config.Limit > 0 {
+				limitMsg = fmt.Sprintf("up to %d repositories", a.config.Limit)
+			}
+			fmt.Printf("Fetching dependency PRs from user: %s (%s)\n",
+				a.config.Target, limitMsg)
 		}
-		prs, err = a.client.FetchUserPullRequests(ctx, a.config.Target)
+		prs, err = a.client.FetchUserPullRequests(ctx, a.config.Target, a.config.Limit)
 	}
 
 	if err != nil {
@@ -59,8 +69,15 @@ func (a *App) Run(ctx context.Context) error {
 	// Render table
 	formatter.RenderTable(prs)
 
-	// Print summary
-	fmt.Printf("\nTotal: %d dependency update PRs\n", len(prs))
+	// Print summary with indicators
+	fmt.Printf("\nTotal: %d dependency update PRs", len(prs))
+	if a.config.Limit > 0 {
+		fmt.Printf(" (limited to %d repositories)", a.config.Limit)
+	}
+	if a.config.SkipChecks {
+		fmt.Printf(" [check runs skipped]")
+	}
+	fmt.Println()
 
 	return nil
 }
