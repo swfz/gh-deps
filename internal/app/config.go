@@ -10,6 +10,8 @@ type Config struct {
 	Target         string // Organization or user name
 	IsOrganization bool   // True if targeting an organization, false for user
 	Verbose        bool   // Enable verbose output
+	Limit          int    // Maximum repositories to process (0 = unlimited)
+	SkipChecks     bool   // Skip fetching check runs
 }
 
 // ParseConfig parses command-line flags and validates configuration
@@ -22,6 +24,9 @@ func ParseConfig() (*Config, error) {
 	config := &Config{}
 	flag.BoolVar(&config.Verbose, "verbose", false, "Enable verbose output")
 	flag.BoolVar(&config.Verbose, "v", false, "Enable verbose output (shorthand)")
+	flag.IntVar(&config.Limit, "limit", 50, "Limit number of repositories to process (0 = unlimited)")
+	flag.IntVar(&config.Limit, "l", 50, "Limit number of repositories (shorthand)")
+	flag.BoolVar(&config.SkipChecks, "skip-checks", false, "Skip fetching CI check runs")
 
 	flag.Parse()
 
@@ -32,6 +37,11 @@ func ParseConfig() (*Config, error) {
 
 	if org != "" && user != "" {
 		return nil, errors.New("cannot specify both --org and --user")
+	}
+
+	// Validate limit
+	if config.Limit < 0 {
+		return nil, errors.New("--limit must be >= 0")
 	}
 
 	// Set target and type
