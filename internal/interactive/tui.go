@@ -246,7 +246,17 @@ func (m model) formatPRLine(num int, pr models.PullRequest) string {
 	merge := formatMergeableState(pr.MergeableState)
 	labels := formatLabels(pr.Labels, 15)
 	version := truncate(pr.Version, 12)
-	title := truncate(pr.Title, 40)
+
+	// Calculate title width dynamically based on terminal width
+	// Fixed columns: # (4) + REPO (20) + BOT (12) + CI (4) + MERGE (6) + LABELS (15) + VERSION (12) = 73
+	// Add spaces between columns (~7) and margins (~10) = 90
+	fixedWidth := 90
+	titleWidth := m.width - fixedWidth
+	if titleWidth < 30 {
+		titleWidth = 30 // Minimum width for narrow terminals
+	}
+	// No maximum limit - use full terminal width
+	title := truncate(pr.Title, titleWidth)
 
 	return fmt.Sprintf("%-4d %-20s %-12s %-4s %-6s %-15s %-12s %s",
 		num, repo, bot, ci, merge, labels, version, title)
