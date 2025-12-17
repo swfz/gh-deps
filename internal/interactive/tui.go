@@ -171,6 +171,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "r":
+			// Manual refresh - only if not in search/confirm/merging/refreshing mode
+			if !m.searchMode && !m.confirmMode && !m.merging && !m.refreshing {
+				m.refreshing = true
+				m.message = "Refreshing PRs..."
+				m.messageType = ""
+				return m, m.refreshPRs()
+			}
+			return m, nil
+
 		case "enter", "y":
 			if m.confirmMode {
 				// Confirm merge
@@ -243,7 +253,7 @@ func (m model) View() string {
 	// Header
 	header := headerStyle.Render(" gh-deps Interactive Mode ")
 	b.WriteString(header + "\n")
-	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search, Enter to merge, q to quit") + "\n\n")
+	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search, r to refresh, Enter to merge, q to quit") + "\n\n")
 
 	// Search bar
 	if m.searchMode {
