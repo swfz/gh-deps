@@ -41,22 +41,26 @@ var (
 
 // model represents the TUI state
 type model struct {
-	prs          []models.PullRequest  // All PRs
-	filtered     []models.PullRequest  // Filtered PRs based on search
-	cursor       int                   // Current cursor position
-	query        string                // Search query
-	searchMode   bool                  // Whether in search mode
-	confirmMode  bool                  // Whether in confirmation mode
-	confirmingPR *models.PullRequest   // PR being confirmed for merge
-	client       *api.Client           // API client for merging
-	ctx          context.Context       // Context for API calls
-	verbose      bool                  // Verbose mode
-	message      string                // Status message
-	messageType  string                // "error", "success", or ""
-	width        int                   // Terminal width
-	height       int                   // Terminal height
-	merging      bool                  // Whether currently merging
-	done         bool                  // Whether to quit
+	prs            []models.PullRequest  // All PRs
+	filtered       []models.PullRequest  // Filtered PRs based on search
+	cursor         int                   // Current cursor position
+	query          string                // Search query
+	searchMode     bool                  // Whether in search mode
+	confirmMode    bool                  // Whether in confirmation mode
+	confirmingPR   *models.PullRequest   // PR being confirmed for merge
+	client         *api.Client           // API client for merging
+	ctx            context.Context       // Context for API calls
+	target         string                // Target org/user for refresh
+	isOrganization bool                  // Whether target is org
+	limit          int                   // PR limit for refresh
+	verbose        bool                  // Verbose mode
+	message        string                // Status message
+	messageType    string                // "error", "success", or ""
+	width          int                   // Terminal width
+	height         int                   // Terminal height
+	merging        bool                  // Whether currently merging
+	refreshing     bool                  // Whether currently refreshing PRs
+	done           bool                  // Whether to quit
 }
 
 // Init initializes the model
@@ -94,9 +98,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor--
 				}
 			}
+
+			// Start refreshing PRs after successful merge
+			m.refreshing = true
+			m.message = "Refreshing PRs..."
+			m.messageType = ""
+			return m, m.refreshPRs()
 		} else {
 			m.messageType = "error"
 		}
+		return m, nil
+
+	case refreshPRsMsg:
+		m.refreshing = false
+
+		if msg.err != nil {
+			m.message = fmt.Sprintf("Failed to refresh PRs: %v", msg.err)
+			m.messageType = "error"
+			return m, nil
+		}
+
+		// Update PR list with new data
+		m.prs = msg.prs
+
+		// Re-apply search filter to new data
+		m.filterPRs()
+
+		// Adjust cursor if out of bounds
+		if m.cursor >= len(m.filtered) {
+			m.cursor = len(m.filtered) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+
+		m.message = fmt.Sprintf("Refreshed: %d PRs loaded", len(m.prs))
+		m.messageType = "success"
+
 		return m, nil
 
 	case tea.KeyMsg:
@@ -222,7 +260,12 @@ func (m model) View() string {
 		case "success":
 			b.WriteString(successStyle.Render("✓ "+m.message) + "\n\n")
 		default:
-			b.WriteString(m.message + "\n\n")
+			// refreshing中はこちら
+			if m.refreshing {
+				b.WriteString(dimStyle.Render("⟳ "+m.message) + "\n\n")
+			} else {
+				b.WriteString(m.message + "\n\n")
+			}
 		}
 	}
 
@@ -407,10 +450,36 @@ func (m *model) mergePR(pr models.PullRequest) tea.Cmd {
 	}
 }
 
+// refreshPRs creates a command to refresh all PRs from API
+func (m *model) refreshPRs() tea.Cmd {
+	return func() tea.Msg {
+		var prs []models.PullRequest
+		var err error
+
+		// Fetch PRs based on org or user
+		if m.isOrganization {
+			prs, err = m.client.FetchOrgPullRequests(m.ctx, m.target, m.limit)
+		} else {
+			prs, err = m.client.FetchUserPullRequests(m.ctx, m.target, m.limit)
+		}
+
+		return refreshPRsMsg{
+			prs: prs,
+			err: err,
+		}
+	}
+}
+
 // mergeResultMsg represents the result of a merge operation
 type mergeResultMsg struct {
 	success bool
 	message string
+}
+
+// refreshPRsMsg represents the result of refreshing PRs
+type refreshPRsMsg struct {
+	prs []models.PullRequest
+	err error
 }
 
 // Helper functions
@@ -446,16 +515,19 @@ func truncate(s string, maxLen int) string {
 }
 
 // RunTUI starts the interactive TUI
-func RunTUI(ctx context.Context, prs []models.PullRequest, client *api.Client, verbose bool) error {
+func RunTUI(ctx context.Context, prs []models.PullRequest, client *api.Client, target string, isOrg bool, limit int, verbose bool) error {
 	m := model{
-		prs:      prs,
-		filtered: prs,
-		cursor:   0,
-		client:   client,
-		ctx:      ctx,
-		verbose:  verbose,
-		width:    80,
-		height:   24,
+		prs:            prs,
+		filtered:       prs,
+		cursor:         0,
+		client:         client,
+		ctx:            ctx,
+		target:         target,
+		isOrganization: isOrg,
+		limit:          limit,
+		verbose:        verbose,
+		width:          80,
+		height:         24,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())

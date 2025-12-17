@@ -82,7 +82,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Enter interactive mode if flag is set
 	if a.config.Interactive {
-		if err := interactive.RunTUI(ctx, sortedPRs, a.client, a.config.Verbose); err != nil {
+		if err := interactive.RunTUI(ctx, sortedPRs, a.client, a.config.Target, a.config.IsOrganization, a.config.Limit, a.config.Verbose); err != nil {
 			return fmt.Errorf("interactive mode failed: %w", err)
 		}
 	}
