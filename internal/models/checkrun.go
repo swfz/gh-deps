@@ -70,3 +70,20 @@ func AggregateCheckStatus(checks []CheckRun) CheckSummary {
 
 	return CheckSummary{Status: status, Total: len(checks)}
 }
+
+// StatusCheckRollupToSummary converts GitHub's statusCheckRollup state to CheckSummary
+// This is more efficient as it uses the aggregated state from GraphQL
+// States: SUCCESS, FAILURE, PENDING, ERROR, or null
+func StatusCheckRollupToSummary(state string) CheckSummary {
+	switch strings.ToUpper(state) {
+	case "SUCCESS":
+		return CheckSummary{Status: StatusSuccess, Total: 1}
+	case "FAILURE", "ERROR":
+		return CheckSummary{Status: StatusFailure, Total: 1}
+	case "PENDING":
+		return CheckSummary{Status: StatusPending, Total: 1}
+	default:
+		// Empty state or unknown - no checks configured
+		return CheckSummary{Status: StatusNone, Total: 0}
+	}
+}

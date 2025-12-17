@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 // Client wraps GitHub API client with rate limiting
 type Client struct {
 	graphqlClient *graphql.Client
+	httpClient    *http.Client
 	rateLimiter   *rate.Limiter
 	verbose       bool
 	skipChecks    bool
@@ -38,6 +40,7 @@ func NewClient(verbose bool, skipChecks bool) (*Client, error) {
 
 	return &Client{
 		graphqlClient: graphqlClient,
+		httpClient:    httpClient,
 		rateLimiter:   rateLimiter,
 		verbose:       verbose,
 		skipChecks:    skipChecks,
@@ -48,7 +51,6 @@ func NewClient(verbose bool, skipChecks bool) (*Client, error) {
 func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string, limit int) ([]models.PullRequest, error) {
 	var allPRs []models.PullRequest
 	var cursor *string
-	repoCount := 0
 
 	for {
 		// Wait for rate limiter
@@ -69,17 +71,16 @@ func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string, limit
 
 		// Process repositories and PRs
 		for _, repo := range query.Organization.Repositories.Nodes {
-			// Check limit before processing
-			if limit > 0 && repoCount >= limit {
-				if c.verbose {
-					fmt.Fprintf(os.Stderr, "[DEBUG] Reached repository limit (%d), stopping\n", limit)
-				}
-				return allPRs, nil
-			}
-
 			prs := c.processPRsFromRepo(ctx, repo, c.verbose)
 			allPRs = append(allPRs, prs...)
-			repoCount++
+
+			// Check PR limit after adding PRs from this repo
+			if limit > 0 && len(allPRs) >= limit {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Reached PR limit (%d), stopping\n", limit)
+				}
+				return allPRs[:limit], nil
+			}
 		}
 
 		// Check if there are more pages
@@ -96,7 +97,6 @@ func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string, limit
 func (c *Client) FetchUserPullRequests(ctx context.Context, userName string, limit int) ([]models.PullRequest, error) {
 	var allPRs []models.PullRequest
 	var cursor *string
-	repoCount := 0
 
 	for {
 		// Wait for rate limiter
@@ -117,17 +117,16 @@ func (c *Client) FetchUserPullRequests(ctx context.Context, userName string, lim
 
 		// Process repositories and PRs
 		for _, repo := range query.User.Repositories.Nodes {
-			// Check limit before processing
-			if limit > 0 && repoCount >= limit {
-				if c.verbose {
-					fmt.Fprintf(os.Stderr, "[DEBUG] Reached repository limit (%d), stopping\n", limit)
-				}
-				return allPRs, nil
-			}
-
 			prs := c.processPRsFromRepo(ctx, repo, c.verbose)
 			allPRs = append(allPRs, prs...)
-			repoCount++
+
+			// Check PR limit after adding PRs from this repo
+			if limit > 0 && len(allPRs) >= limit {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Reached PR limit (%d), stopping\n", limit)
+				}
+				return allPRs[:limit], nil
+			}
 		}
 
 		// Check if there are more pages
@@ -164,102 +163,41 @@ func (c *Client) processPRsFromRepo(ctx context.Context, repo RepositoryNode, ve
 			fmt.Fprintf(os.Stderr, "[DEBUG] PR #%d is %s bot\n", pr.Number, botType)
 		}
 
-		// Conditionally fetch check runs
-		var checkRuns []models.CheckRun
-		if !c.skipChecks {
-			checkRuns = c.fetchCheckRuns(ctx, repo.NameWithOwner, pr.HeadRefOid)
+		// Get check status from statusCheckRollup (efficient - no extra API call)
+		var checkSummary models.CheckSummary
+		if !c.skipChecks && len(pr.Commits.Nodes) > 0 && pr.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
+			state := pr.Commits.Nodes[0].Commit.StatusCheckRollup.State
+			checkSummary = models.StatusCheckRollupToSummary(state)
+			if verbose {
+				fmt.Fprintf(os.Stderr, "[DEBUG] PR #%d status: %s\n", pr.Number, state)
+			}
 		} else {
-			checkRuns = []models.CheckRun{} // Empty when skipped
+			// No status check rollup available (or checks skipped)
+			checkSummary = models.CheckSummary{Status: models.StatusNone, Total: 0}
+			if verbose && !c.skipChecks {
+				fmt.Fprintf(os.Stderr, "[DEBUG] PR #%d has no status check rollup\n", pr.Number)
+			}
 		}
 
 		// Create PR model
 		prs = append(prs, models.PullRequest{
-			Repository:   repo.NameWithOwner,
-			Number:       pr.Number,
-			Title:        pr.Title,
-			Body:         pr.Body,
-			Author:       pr.Author.Login,
-			CreatedAt:    pr.CreatedAt,
-			URL:          pr.URL,
-			HeadSHA:      pr.HeadRefOid,
-			BotType:      botType,
-			CheckSummary: models.AggregateCheckStatus(checkRuns),
-			Version:      parser.ExtractVersion(pr.Body, botType),
+			Repository:     repo.NameWithOwner,
+			Number:         pr.Number,
+			Title:          pr.Title,
+			Body:           pr.Body,
+			Author:         pr.Author.Login,
+			CreatedAt:      pr.CreatedAt,
+			URL:            pr.URL,
+			HeadSHA:        pr.HeadRefOid,
+			BotType:        botType,
+			CheckSummary:   checkSummary,
+			Version:        parser.ExtractVersion(pr.Body, botType),
+			MergeableState: models.MergeableState(pr.Mergeable),
 		})
 	}
 
 	return prs
 }
 
-// fetchCheckRuns fetches check runs for a specific commit
-// Returns empty slice if fetch fails (to avoid blocking the entire operation)
-func (c *Client) fetchCheckRuns(ctx context.Context, repoFullName string, commitSHA string) []models.CheckRun {
-	if c.verbose {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Fetching check runs for %s@%s\n", repoFullName, commitSHA[:7])
-	}
-
-	// Wait for rate limiter
-	if err := c.rateLimiter.Wait(ctx); err != nil {
-		if c.verbose {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Rate limiter error: %v\n", err)
-		}
-		return []models.CheckRun{}
-	}
-
-	// Parse owner and repo name
-	parts := parseRepoFullName(repoFullName)
-	if len(parts) != 2 {
-		if c.verbose {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Failed to parse repo name: %s\n", repoFullName)
-		}
-		return []models.CheckRun{}
-	}
-	owner, name := parts[0], parts[1]
-
-	var query CheckRunsQuery
-	variables := map[string]interface{}{
-		"owner":     graphql.String(owner),
-		"name":      graphql.String(name),
-		"commitSHA": GitObjectID(commitSHA),
-	}
-
-	if err := c.graphqlClient.Query(ctx, &query, variables); err != nil {
-		if c.verbose {
-			fmt.Fprintf(os.Stderr, "[DEBUG] GraphQL query failed for check runs: %v\n", err)
-		}
-		// Silently fail for individual PRs to avoid blocking entire operation
-		return []models.CheckRun{}
-	}
-
-	// Extract check runs from response
-	var checkRuns []models.CheckRun
-	for _, suite := range query.Repository.Object.Commit.CheckSuites.Nodes {
-		for _, run := range suite.CheckRuns.Nodes {
-			checkRuns = append(checkRuns, models.CheckRun{
-				Name:       run.Name,
-				Status:     run.Status,
-				Conclusion: run.Conclusion,
-			})
-		}
-	}
-
-	if c.verbose {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Found %d check runs\n", len(checkRuns))
-		for i, run := range checkRuns {
-			fmt.Fprintf(os.Stderr, "[DEBUG]   [%d] %s: status=%s, conclusion=%s\n",
-				i+1, run.Name, run.Status, run.Conclusion)
-		}
-	}
-
-	return checkRuns
-}
-
-// parseRepoFullName splits "owner/repo" into [owner, repo]
-func parseRepoFullName(fullName string) []string {
-	for i, ch := range fullName {
-		if ch == '/' {
-			return []string{fullName[:i], fullName[i+1:]}
-		}
-	}
-	return []string{fullName}
-}
+// Note: fetchCheckRuns function removed - now using statusCheckRollup from GraphQL
+// which is much more efficient (no extra API calls per PR)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/swfz/gh-deps/internal/api"
 	"github.com/swfz/gh-deps/internal/formatter"
+	"github.com/swfz/gh-deps/internal/interactive"
 	"github.com/swfz/gh-deps/internal/models"
 )
 
@@ -36,9 +37,9 @@ func (a *App) Run(ctx context.Context) error {
 	// Fetch PRs based on target type (org vs user)
 	if a.config.IsOrganization {
 		if a.config.Verbose {
-			limitMsg := "all repositories"
+			limitMsg := "all PRs"
 			if a.config.Limit > 0 {
-				limitMsg = fmt.Sprintf("up to %d repositories", a.config.Limit)
+				limitMsg = fmt.Sprintf("up to %d PRs", a.config.Limit)
 			}
 			fmt.Printf("Fetching dependency PRs from organization: %s (%s)\n",
 				a.config.Target, limitMsg)
@@ -46,9 +47,9 @@ func (a *App) Run(ctx context.Context) error {
 		prs, err = a.client.FetchOrgPullRequests(ctx, a.config.Target, a.config.Limit)
 	} else {
 		if a.config.Verbose {
-			limitMsg := "all repositories"
+			limitMsg := "all PRs"
 			if a.config.Limit > 0 {
-				limitMsg = fmt.Sprintf("up to %d repositories", a.config.Limit)
+				limitMsg = fmt.Sprintf("up to %d PRs", a.config.Limit)
 			}
 			fmt.Printf("Fetching dependency PRs from user: %s (%s)\n",
 				a.config.Target, limitMsg)
@@ -66,18 +67,26 @@ func (a *App) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// Render table
-	formatter.RenderTable(prs)
+	// Render table (with row numbers if interactive mode)
+	sortedPRs := formatter.RenderTable(prs, a.config.Interactive)
 
 	// Print summary with indicators
 	fmt.Printf("\nTotal: %d dependency update PRs", len(prs))
-	if a.config.Limit > 0 {
-		fmt.Printf(" (limited to %d repositories)", a.config.Limit)
+	if a.config.Limit > 0 && len(prs) >= a.config.Limit {
+		fmt.Printf(" (limited to %d PRs)", a.config.Limit)
 	}
 	if a.config.SkipChecks {
 		fmt.Printf(" [check runs skipped]")
 	}
 	fmt.Println()
+
+	// Enter interactive mode if flag is set
+	if a.config.Interactive {
+		runner := interactive.NewRunner(a.client, a.config.Verbose)
+		if err := runner.Run(ctx, sortedPRs); err != nil {
+			return fmt.Errorf("interactive mode failed: %w", err)
+		}
+	}
 
 	return nil
 }
