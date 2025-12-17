@@ -19,7 +19,7 @@ func RenderTable(prs []models.PullRequest) {
 	table := tablewriter.NewWriter(os.Stdout)
 
 	// Set header using new API
-	table.Header("REPO", "BOT", "STATUS", "DATE", "VERSION", "TITLE")
+	table.Header("REPO", "BOT", "STATUS", "DATE", "VERSION", "TITLE", "URL")
 
 	// Add rows
 	for _, pr := range prs {
@@ -30,6 +30,7 @@ func RenderTable(prs []models.PullRequest) {
 			pr.FormattedDate(),
 			pr.Version,
 			TruncateWithEllipsis(pr.Title, 60),
+			pr.URL,
 		}
 		table.Append(row...)
 	}
