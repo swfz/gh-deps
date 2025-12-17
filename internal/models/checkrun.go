@@ -1,5 +1,7 @@
 package models
 
+import "strings"
+
 // CheckStatus represents the visual status indicator for CI checks
 type CheckStatus string
 
@@ -38,16 +40,17 @@ func AggregateCheckStatus(checks []CheckRun) CheckSummary {
 	hasPending := false
 
 	for _, check := range checks {
-		// Check if any run is not completed
-		if check.Status != "completed" {
+		// Check if any run is not completed (case-insensitive)
+		if !strings.EqualFold(check.Status, "completed") {
 			hasPending = true
 			continue
 		}
 
-		// For completed checks, check conclusion
+		// For completed checks, check conclusion (case-insensitive)
 		// Success conclusions: success, neutral, skipped
 		// Failure conclusions: failure, cancelled, timed_out, action_required
-		switch check.Conclusion {
+		conclusion := strings.ToLower(check.Conclusion)
+		switch conclusion {
 		case "success", "neutral", "skipped":
 			// These are considered passing
 			continue
