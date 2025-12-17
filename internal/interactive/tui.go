@@ -41,20 +41,22 @@ var (
 
 // model represents the TUI state
 type model struct {
-	prs          []models.PullRequest // All PRs
-	filtered     []models.PullRequest // Filtered PRs based on search
-	cursor       int                  // Current cursor position
-	query        string               // Search query
-	searchMode   bool                 // Whether in search mode
-	client       *api.Client          // API client for merging
-	ctx          context.Context      // Context for API calls
-	verbose      bool                 // Verbose mode
-	message      string               // Status message
-	messageType  string               // "error", "success", or ""
-	width        int                  // Terminal width
-	height       int                  // Terminal height
-	merging      bool                 // Whether currently merging
-	done         bool                 // Whether to quit
+	prs          []models.PullRequest  // All PRs
+	filtered     []models.PullRequest  // Filtered PRs based on search
+	cursor       int                   // Current cursor position
+	query        string                // Search query
+	searchMode   bool                  // Whether in search mode
+	confirmMode  bool                  // Whether in confirmation mode
+	confirmingPR *models.PullRequest   // PR being confirmed for merge
+	client       *api.Client           // API client for merging
+	ctx          context.Context       // Context for API calls
+	verbose      bool                  // Verbose mode
+	message      string                // Status message
+	messageType  string                // "error", "success", or ""
+	width        int                   // Terminal width
+	height       int                   // Terminal height
+	merging      bool                  // Whether currently merging
+	done         bool                  // Whether to quit
 }
 
 // Init initializes the model
@@ -98,14 +100,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Clear message on any key press
-		if m.message != "" {
+		// Clear message on any key press (except in confirm mode)
+		if m.message != "" && !m.confirmMode {
 			m.message = ""
 			m.messageType = ""
 		}
 
 		switch msg.String() {
-		case "ctrl+c", "q", "esc":
+		case "ctrl+c":
+			m.done = true
+			return m, tea.Quit
+
+		case "q", "esc":
+			if m.confirmMode {
+				// Cancel confirmation
+				m.confirmMode = false
+				m.confirmingPR = nil
+				return m, nil
+			}
 			if m.searchMode {
 				m.searchMode = false
 				m.query = ""
@@ -116,30 +128,52 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "/":
-			m.searchMode = true
+			if !m.confirmMode {
+				m.searchMode = true
+			}
 			return m, nil
 
-		case "enter":
+		case "enter", "y":
+			if m.confirmMode {
+				// Confirm merge
+				if m.confirmingPR != nil && !m.merging {
+					m.merging = true
+					m.message = "Merging..."
+					m.messageType = ""
+					pr := *m.confirmingPR
+					m.confirmMode = false
+					m.confirmingPR = nil
+					return m, m.mergePR(pr)
+				}
+				return m, nil
+			}
 			if m.searchMode {
 				m.searchMode = false
 				return m, nil
 			}
-			// Merge selected PR
-			if len(m.filtered) > 0 && m.cursor < len(m.filtered) && !m.merging {
-				m.merging = true
-				m.message = "Merging..."
-				m.messageType = ""
-				return m, m.mergePR(m.filtered[m.cursor])
+			// Show confirmation modal
+			if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+				m.confirmMode = true
+				pr := m.filtered[m.cursor]
+				m.confirmingPR = &pr
+			}
+			return m, nil
+
+		case "n":
+			if m.confirmMode {
+				// Cancel confirmation
+				m.confirmMode = false
+				m.confirmingPR = nil
 			}
 			return m, nil
 
 		case "up", "k":
-			if !m.searchMode && m.cursor > 0 {
+			if !m.searchMode && !m.confirmMode && m.cursor > 0 {
 				m.cursor--
 			}
 
 		case "down", "j":
-			if !m.searchMode && m.cursor < len(m.filtered)-1 {
+			if !m.searchMode && !m.confirmMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 			}
 
@@ -150,7 +184,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		default:
-			if m.searchMode && len(msg.String()) == 1 {
+			if m.searchMode && !m.confirmMode && len(msg.String()) == 1 {
 				m.query += msg.String()
 				m.filterPRs()
 			}
@@ -233,6 +267,43 @@ func (m model) View() string {
 		b.WriteString("\n" + dimStyle.Render("  No PRs match your filter") + "\n")
 	} else {
 		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  %d/%d PRs", m.cursor+1, len(m.filtered))) + "\n")
+	}
+
+	// Confirmation modal overlay
+	if m.confirmMode && m.confirmingPR != nil {
+		pr := *m.confirmingPR
+
+		// Build modal content
+		var modal strings.Builder
+		modal.WriteString("\n")
+		modal.WriteString("╔═══════════════════════════════════════════════════════════════╗\n")
+		modal.WriteString("║               CONFIRM MERGE                                   ║\n")
+		modal.WriteString("╠═══════════════════════════════════════════════════════════════╣\n")
+		modal.WriteString(fmt.Sprintf("║ Repository: %-49s ║\n", pr.Repository))
+		modal.WriteString(fmt.Sprintf("║ PR Number:  #%-47d ║\n", pr.Number))
+		modal.WriteString(fmt.Sprintf("║ Title:      %-49s ║\n", truncate(pr.Title, 49)))
+		modal.WriteString(fmt.Sprintf("║ Bot:        %-49s ║\n", pr.BotType.DisplayName()))
+		modal.WriteString(fmt.Sprintf("║ Version:    %-49s ║\n", pr.Version))
+		modal.WriteString(fmt.Sprintf("║ CI Status:  %-49s ║\n", string(pr.CheckSummary.Status)))
+		modal.WriteString(fmt.Sprintf("║ Mergeable:  %-49s ║\n", formatMergeableState(pr.MergeableState)))
+		modal.WriteString("╠═══════════════════════════════════════════════════════════════╣\n")
+
+		// Show warnings
+		if pr.MergeableState == models.MergeableStateConflicting {
+			modal.WriteString("║ " + errorStyle.Render("⚠ WARNING: This PR has conflicts!") + strings.Repeat(" ", 29) + "║\n")
+		} else if pr.CheckSummary.Status == models.StatusFailure {
+			modal.WriteString("║ " + errorStyle.Render("⚠ WARNING: CI checks are failing!") + strings.Repeat(" ", 27) + "║\n")
+		} else if pr.CheckSummary.Status == models.StatusPending {
+			modal.WriteString("║ ⚠ WARNING: CI checks are pending" + strings.Repeat(" ", 29) + "║\n")
+		}
+
+		modal.WriteString("║                                                               ║\n")
+		modal.WriteString("║ Merge this PR? (y/n or Esc to cancel)                        ║\n")
+		modal.WriteString("╚═══════════════════════════════════════════════════════════════╝\n")
+
+		// Center the modal and overlay it on the screen
+		modalContent := selectedStyle.Render(modal.String())
+		b.WriteString("\n" + modalContent)
 	}
 
 	return b.String()
