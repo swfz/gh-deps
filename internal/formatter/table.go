@@ -22,9 +22,9 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 
 	// Set header - add # column if showing row numbers
 	if showRowNumbers {
-		table.Header("#", "REPO", "BOT", "STATUS", "DATE", "VERSION", "TITLE", "URL")
+		table.Header("#", "REPO", "BOT", "CI", "MERGE", "DATE", "VERSION", "TITLE", "URL")
 	} else {
-		table.Header("REPO", "BOT", "STATUS", "DATE", "VERSION", "TITLE", "URL")
+		table.Header("REPO", "BOT", "CI", "MERGE", "DATE", "VERSION", "TITLE", "URL")
 	}
 
 	// Add rows
@@ -36,6 +36,7 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 				TruncateString(pr.RepoName(), 20),
 				pr.BotType.DisplayName(),
 				string(pr.CheckSummary.Status),
+				formatMergeableState(pr.MergeableState),
 				pr.FormattedDate(),
 				pr.Version,
 				TruncateWithEllipsis(pr.Title, 60),
@@ -46,6 +47,7 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 				TruncateString(pr.RepoName(), 20),
 				pr.BotType.DisplayName(),
 				string(pr.CheckSummary.Status),
+				formatMergeableState(pr.MergeableState),
 				pr.FormattedDate(),
 				pr.Version,
 				TruncateWithEllipsis(pr.Title, 60),
@@ -57,4 +59,18 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 
 	table.Render()
 	return prs
+}
+
+// formatMergeableState returns a visual indicator for mergeable state
+func formatMergeableState(state models.MergeableState) string {
+	switch state {
+	case models.MergeableStateMergeable:
+		return "✓"
+	case models.MergeableStateConflicting:
+		return "✗"
+	case models.MergeableStateUnknown:
+		return "?"
+	default:
+		return "-"
+	}
 }
