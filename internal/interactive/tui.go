@@ -3,6 +3,7 @@ package interactive
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -120,6 +121,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update PR list with new data
 		m.prs = msg.prs
+
+		// Sort by repository name (same as initial display)
+		sort.Slice(m.prs, func(i, j int) bool {
+			return m.prs[i].RepoName() < m.prs[j].RepoName()
+		})
 
 		// Re-apply search filter to new data
 		m.filterPRs()
