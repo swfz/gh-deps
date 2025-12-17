@@ -28,6 +28,7 @@ type PullRequest struct {
 	CheckSummary   CheckSummary   // Aggregated check status
 	Version        string         // Extracted version info (e.g., "1.0.0 -> 1.1.0")
 	MergeableState MergeableState // Mergeable state (MERGEABLE, CONFLICTING, UNKNOWN)
+	Labels         []string       // PR labels
 }
 
 // FormattedDate returns the creation date in YYYY-MM-DD format

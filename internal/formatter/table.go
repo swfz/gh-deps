@@ -22,9 +22,9 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 
 	// Set header - add # column if showing row numbers
 	if showRowNumbers {
-		table.Header("#", "REPO", "BOT", "CI", "MERGE", "DATE", "VERSION", "TITLE", "URL")
+		table.Header("#", "REPO", "BOT", "CI", "MERGE", "LABELS", "DATE", "VERSION", "TITLE", "URL")
 	} else {
-		table.Header("REPO", "BOT", "CI", "MERGE", "DATE", "VERSION", "TITLE", "URL")
+		table.Header("REPO", "BOT", "CI", "MERGE", "LABELS", "DATE", "VERSION", "TITLE", "URL")
 	}
 
 	// Add rows
@@ -37,6 +37,7 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 				pr.BotType.DisplayName(),
 				string(pr.CheckSummary.Status),
 				formatMergeableState(pr.MergeableState),
+				formatLabels(pr.Labels),
 				pr.FormattedDate(),
 				pr.Version,
 				TruncateWithEllipsis(pr.Title, 60),
@@ -48,6 +49,7 @@ func RenderTable(prs []models.PullRequest, showRowNumbers bool) []models.PullReq
 				pr.BotType.DisplayName(),
 				string(pr.CheckSummary.Status),
 				formatMergeableState(pr.MergeableState),
+				formatLabels(pr.Labels),
 				pr.FormattedDate(),
 				pr.Version,
 				TruncateWithEllipsis(pr.Title, 60),
@@ -73,4 +75,20 @@ func formatMergeableState(state models.MergeableState) string {
 	default:
 		return "-"
 	}
+}
+
+// formatLabels formats PR labels for display
+func formatLabels(labels []string) string {
+	if len(labels) == 0 {
+		return "-"
+	}
+	// Join labels with comma and truncate if too long
+	labelsStr := ""
+	for i, label := range labels {
+		if i > 0 {
+			labelsStr += ","
+		}
+		labelsStr += label
+	}
+	return TruncateWithEllipsis(labelsStr, 30)
 }

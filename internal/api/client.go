@@ -179,6 +179,12 @@ func (c *Client) processPRsFromRepo(ctx context.Context, repo RepositoryNode, ve
 			}
 		}
 
+		// Extract label names
+		var labels []string
+		for _, label := range pr.Labels.Nodes {
+			labels = append(labels, label.Name)
+		}
+
 		// Create PR model
 		prs = append(prs, models.PullRequest{
 			Repository:     repo.NameWithOwner,
@@ -193,6 +199,7 @@ func (c *Client) processPRsFromRepo(ctx context.Context, repo RepositoryNode, ve
 			CheckSummary:   checkSummary,
 			Version:        parser.ExtractVersion(pr.Body, botType),
 			MergeableState: models.MergeableState(pr.Mergeable),
+			Labels:         labels,
 		})
 	}
 

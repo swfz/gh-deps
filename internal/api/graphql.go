@@ -33,6 +33,11 @@ type PullRequestNode struct {
 			}
 		}
 	} `graphql:"commits(last: 1)"`
+	Labels struct {
+		Nodes []struct {
+			Name string
+		}
+	} `graphql:"labels(first: 10)"`
 }
 
 // Note: CheckRunsQuery, CheckSuiteNode, and CheckRunNode removed
