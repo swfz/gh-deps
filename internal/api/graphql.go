@@ -2,6 +2,9 @@ package api
 
 import "time"
 
+// GitObjectID represents a Git object ID scalar type in GitHub's GraphQL API
+type GitObjectID string
+
 // GraphQL query structures for fetching organization/user repositories with PRs and check runs
 
 // RepositoryNode represents a repository with its pull requests

@@ -194,14 +194,24 @@ func (c *Client) processPRsFromRepo(ctx context.Context, repo RepositoryNode, ve
 // fetchCheckRuns fetches check runs for a specific commit
 // Returns empty slice if fetch fails (to avoid blocking the entire operation)
 func (c *Client) fetchCheckRuns(ctx context.Context, repoFullName string, commitSHA string) []models.CheckRun {
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Fetching check runs for %s@%s\n", repoFullName, commitSHA[:7])
+	}
+
 	// Wait for rate limiter
 	if err := c.rateLimiter.Wait(ctx); err != nil {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Rate limiter error: %v\n", err)
+		}
 		return []models.CheckRun{}
 	}
 
 	// Parse owner and repo name
 	parts := parseRepoFullName(repoFullName)
 	if len(parts) != 2 {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Failed to parse repo name: %s\n", repoFullName)
+		}
 		return []models.CheckRun{}
 	}
 	owner, name := parts[0], parts[1]
@@ -210,10 +220,13 @@ func (c *Client) fetchCheckRuns(ctx context.Context, repoFullName string, commit
 	variables := map[string]interface{}{
 		"owner":     graphql.String(owner),
 		"name":      graphql.String(name),
-		"commitSHA": graphql.String(commitSHA),
+		"commitSHA": GitObjectID(commitSHA),
 	}
 
 	if err := c.graphqlClient.Query(ctx, &query, variables); err != nil {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[DEBUG] GraphQL query failed for check runs: %v\n", err)
+		}
 		// Silently fail for individual PRs to avoid blocking entire operation
 		return []models.CheckRun{}
 	}
@@ -227,6 +240,14 @@ func (c *Client) fetchCheckRuns(ctx context.Context, repoFullName string, commit
 				Status:     run.Status,
 				Conclusion: run.Conclusion,
 			})
+		}
+	}
+
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Found %d check runs\n", len(checkRuns))
+		for i, run := range checkRuns {
+			fmt.Fprintf(os.Stderr, "[DEBUG]   [%d] %s: status=%s, conclusion=%s\n",
+				i+1, run.Name, run.Status, run.Conclusion)
 		}
 	}
 
