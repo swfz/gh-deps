@@ -19,10 +19,11 @@ type Client struct {
 	graphqlClient *graphql.Client
 	rateLimiter   *rate.Limiter
 	verbose       bool
+	skipChecks    bool
 }
 
 // NewClient creates a new GitHub API client using gh CLI authentication
-func NewClient(verbose bool) (*Client, error) {
+func NewClient(verbose bool, skipChecks bool) (*Client, error) {
 	// Use gh CLI's authentication
 	httpClient, err := api.DefaultHTTPClient()
 	if err != nil {
@@ -39,13 +40,15 @@ func NewClient(verbose bool) (*Client, error) {
 		graphqlClient: graphqlClient,
 		rateLimiter:   rateLimiter,
 		verbose:       verbose,
+		skipChecks:    skipChecks,
 	}, nil
 }
 
 // FetchOrgPullRequests fetches all dependency update PRs from an organization
-func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string) ([]models.PullRequest, error) {
+func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string, limit int) ([]models.PullRequest, error) {
 	var allPRs []models.PullRequest
 	var cursor *string
+	repoCount := 0
 
 	for {
 		// Wait for rate limiter
@@ -66,8 +69,17 @@ func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string) ([]mo
 
 		// Process repositories and PRs
 		for _, repo := range query.Organization.Repositories.Nodes {
+			// Check limit before processing
+			if limit > 0 && repoCount >= limit {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Reached repository limit (%d), stopping\n", limit)
+				}
+				return allPRs, nil
+			}
+
 			prs := c.processPRsFromRepo(ctx, repo, c.verbose)
 			allPRs = append(allPRs, prs...)
+			repoCount++
 		}
 
 		// Check if there are more pages
@@ -81,9 +93,10 @@ func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string) ([]mo
 }
 
 // FetchUserPullRequests fetches all dependency update PRs from a user's repositories
-func (c *Client) FetchUserPullRequests(ctx context.Context, userName string) ([]models.PullRequest, error) {
+func (c *Client) FetchUserPullRequests(ctx context.Context, userName string, limit int) ([]models.PullRequest, error) {
 	var allPRs []models.PullRequest
 	var cursor *string
+	repoCount := 0
 
 	for {
 		// Wait for rate limiter
@@ -104,8 +117,17 @@ func (c *Client) FetchUserPullRequests(ctx context.Context, userName string) ([]
 
 		// Process repositories and PRs
 		for _, repo := range query.User.Repositories.Nodes {
+			// Check limit before processing
+			if limit > 0 && repoCount >= limit {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Reached repository limit (%d), stopping\n", limit)
+				}
+				return allPRs, nil
+			}
+
 			prs := c.processPRsFromRepo(ctx, repo, c.verbose)
 			allPRs = append(allPRs, prs...)
+			repoCount++
 		}
 
 		// Check if there are more pages
@@ -142,8 +164,13 @@ func (c *Client) processPRsFromRepo(ctx context.Context, repo RepositoryNode, ve
 			fmt.Fprintf(os.Stderr, "[DEBUG] PR #%d is %s bot\n", pr.Number, botType)
 		}
 
-		// Fetch check runs for this PR's head commit
-		checkRuns := c.fetchCheckRuns(ctx, repo.NameWithOwner, pr.HeadRefOid)
+		// Conditionally fetch check runs
+		var checkRuns []models.CheckRun
+		if !c.skipChecks {
+			checkRuns = c.fetchCheckRuns(ctx, repo.NameWithOwner, pr.HeadRefOid)
+		} else {
+			checkRuns = []models.CheckRun{} // Empty when skipped
+		}
 
 		// Create PR model
 		prs = append(prs, models.PullRequest{
