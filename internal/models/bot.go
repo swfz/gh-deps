@@ -38,3 +38,24 @@ func DetectBot(author string) (BotType, bool) {
 func (b BotType) DisplayName() string {
 	return string(b)
 }
+
+// RebaseCommand returns the comment command to trigger a rebase for dependabot
+// Returns empty string if the bot doesn't support comment-based rebase
+func (b BotType) RebaseCommand() string {
+	switch b {
+	case BotDependabot:
+		return "@dependabot rebase"
+	default:
+		return ""
+	}
+}
+
+// SupportsRebase returns true if the bot supports rebase functionality
+func (b BotType) SupportsRebase() bool {
+	return b == BotDependabot || b == BotRenovate
+}
+
+// UsesCheckboxRebase returns true if the bot uses checkbox-based rebase (Renovate)
+func (b BotType) UsesCheckboxRebase() bool {
+	return b == BotRenovate
+}
