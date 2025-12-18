@@ -282,9 +282,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			// Manual refresh - only if not in search/confirm/merging/refreshing mode
 			if !m.searchMode && !m.confirmMode && !m.merging && !m.refreshing {
-				// Clear polling state on manual refresh
-				m.pollingRepos = make(map[string]*pollState)
-
 				m.refreshing = true
 				m.message = "Refreshing PRs..."
 				m.messageType = ""
@@ -990,11 +987,11 @@ func (m *model) pollRepository(repository string) tea.Cmd {
 			}
 		}
 
-		// Check if any PENDING PRs exist
-		hasPending := false
+		// Check if any PENDING PRs or UNKNOWN mergeable state exist
+		hasUnresolvedStatus := false
 		for _, pr := range prs {
-			if pr.CheckSummary.Status == models.StatusPending {
-				hasPending = true
+			if pr.CheckSummary.Status == models.StatusPending || pr.MergeableState == models.MergeableStateUnknown {
+				hasUnresolvedStatus = true
 				break
 			}
 		}
@@ -1003,7 +1000,7 @@ func (m *model) pollRepository(repository string) tea.Cmd {
 		state.attemptCount++
 
 		// Determine if we should stop polling
-		stopPolling := !hasPending || state.attemptCount >= pollMaxAttempts
+		stopPolling := !hasUnresolvedStatus || state.attemptCount >= pollMaxAttempts
 
 		return pollResultMsg{
 			repository:  repository,
