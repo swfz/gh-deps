@@ -246,10 +246,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.searchMode {
-				m.searchMode = false
-				return m, nil
-			}
 			// Show confirmation modal
 			if len(m.filtered) > 0 && m.cursor < len(m.filtered) {
 				m.confirmMode = true
@@ -285,6 +281,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 
+		case "ctrl+k":
+			// Cursor movement in search mode
+			if m.searchMode && m.cursor > 0 {
+				m.cursor--
+			}
+
+		case "ctrl+j":
+			// Cursor movement in search mode
+			if m.searchMode && m.cursor < len(m.filtered)-1 {
+				m.cursor++
+			}
+
 		case "backspace":
 			if m.searchMode && len(m.query) > 0 {
 				m.query = m.query[:len(m.query)-1]
@@ -313,11 +321,11 @@ func (m model) View() string {
 	// Header
 	header := headerStyle.Render(" gh-deps Interactive Mode ")
 	b.WriteString(header + "\n")
-	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search, o to open in browser, r to refresh, Enter to merge, q to quit") + "\n\n")
+	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search (Ctrl+J/K in search), o to open in browser, r to refresh, Enter to merge, q to quit") + "\n\n")
 
 	// Search bar
 	if m.searchMode {
-		b.WriteString(fmt.Sprintf("Search: %s█\n\n", m.query))
+		b.WriteString(fmt.Sprintf("Search: %s█ (Ctrl+J/K to navigate, Esc to exit)\n\n", m.query))
 	} else if m.query != "" {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("Filter: %s (press / to edit, Esc to clear)", m.query)) + "\n\n")
 	}
