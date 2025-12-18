@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -46,7 +47,34 @@ var (
 	successStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("46")).
 			Bold(true)
+
+	pollingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
 )
+
+// PRIdentifier uniquely identifies a PR by repository and number
+type PRIdentifier struct {
+	Repository string
+	Number     int
+}
+
+// Polling constants
+const (
+	pollInitialBackoff = 2 * time.Second
+	pollMaxBackoff     = 30 * time.Second
+	pollMultiplier     = 2.0
+	pollMaxAttempts    = 10
+)
+
+// pollState tracks the polling state for a repository
+type pollState struct {
+	repository      string        // Repository name being polled
+	backoffDuration time.Duration // Current backoff duration
+	attemptCount    int           // Number of polling attempts made
+	lastPollTime    time.Time     // Last time we polled
+	timerActive     bool          // Whether a timer is currently running
+}
 
 // model represents the TUI state
 type model struct {
@@ -68,10 +96,11 @@ type model struct {
 	messageType    string                // "error", "success", or ""
 	width          int                   // Terminal width
 	height         int                   // Terminal height
-	merging        bool                  // Whether currently merging
-	refreshing     bool                  // Whether currently refreshing PRs
-	rebasing       bool                  // Whether currently triggering rebase
-	done           bool                  // Whether to quit
+	merging        bool                     // Whether currently merging
+	refreshing     bool                     // Whether currently refreshing PRs
+	rebasing       bool                     // Whether currently triggering rebase
+	done           bool                     // Whether to quit
+	pollingRepos   map[string]*pollState    // Track which repos are being polled
 }
 
 // Init initializes the model
@@ -92,8 +121,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = msg.message
 		if msg.success {
 			m.messageType = "success"
-			// Remove merged PR from list
+
+			// Capture merged PR repository before removal
+			var mergedRepo string
 			if m.cursor < len(m.filtered) {
+				mergedRepo = m.filtered[m.cursor].Repository
+
 				// Find and remove from both filtered and original list
 				mergedPR := m.filtered[m.cursor]
 				m.filtered = append(m.filtered[:m.cursor], m.filtered[m.cursor+1:]...)
@@ -114,6 +147,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshing = true
 			m.message = "Refreshing PRs..."
 			m.messageType = ""
+
+			// Also start polling the merged repository
+			if mergedRepo != "" {
+				return m, tea.Batch(
+					m.refreshPRs(),
+					m.startPolling(mergedRepo),
+				)
+			}
+
 			return m, m.refreshPRs()
 		} else {
 			m.messageType = "error"
@@ -150,18 +192,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-apply search filter to new data
 		m.filterPRs()
 
-		// Adjust cursor if out of bounds
-		if m.cursor >= len(m.filtered) {
-			m.cursor = len(m.filtered) - 1
-		}
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
+		// Restore cursor position to previously selected PR
+		m.restoreCursorPosition(msg.prevSelection)
 
 		m.message = fmt.Sprintf("Refreshed: %d PRs loaded", len(m.prs))
 		m.messageType = "success"
 
 		return m, nil
+
+	case pollTimerMsg:
+		// Timer expired, execute poll
+		return m, m.pollRepository(msg.repository)
+
+	case pollResultMsg:
+		state, exists := m.pollingRepos[msg.repository]
+		if !exists {
+			// Polling was cancelled
+			return m, nil
+		}
+
+		state.timerActive = false
+
+		if msg.err != nil {
+			// Log error but continue polling unless max attempts reached
+			if m.verbose {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Poll error for %s: %v\n", msg.repository, msg.err)
+			}
+		} else if len(msg.prs) > 0 {
+			// Merge polled PRs into existing list
+			m.mergePolledPRs(msg.prs)
+		}
+
+		if msg.stopPolling {
+			// Stop polling this repository
+			delete(m.pollingRepos, msg.repository)
+			return m, nil
+		}
+
+		// Calculate next backoff
+		state.backoffDuration = time.Duration(float64(state.backoffDuration) * pollMultiplier)
+		if state.backoffDuration > pollMaxBackoff {
+			state.backoffDuration = pollMaxBackoff
+		}
+		state.lastPollTime = time.Now()
+		state.timerActive = true
+
+		// Schedule next poll
+		backoff := state.backoffDuration
+		return m, func() tea.Msg {
+			time.Sleep(backoff)
+			return pollTimerMsg{repository: msg.repository}
+		}
 
 	case tea.KeyMsg:
 		// Clear message on any key press (except in confirm mode)
@@ -201,6 +282,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			// Manual refresh - only if not in search/confirm/merging/refreshing mode
 			if !m.searchMode && !m.confirmMode && !m.merging && !m.refreshing {
+				// Clear polling state on manual refresh
+				m.pollingRepos = make(map[string]*pollState)
+
 				m.refreshing = true
 				m.message = "Refreshing PRs..."
 				m.messageType = ""
@@ -293,6 +377,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 
+		case "ctrl+u":
+			// Half page up
+			if !m.searchMode && !m.confirmMode {
+				halfPage := m.getPageSize() / 2
+				m.moveCursor(-halfPage)
+			}
+
+		case "ctrl+d":
+			// Half page down
+			if !m.searchMode && !m.confirmMode {
+				halfPage := m.getPageSize() / 2
+				m.moveCursor(halfPage)
+			}
+
+		case "ctrl+f":
+			// Full page down
+			if !m.searchMode && !m.confirmMode {
+				fullPage := m.getPageSize()
+				m.moveCursor(fullPage)
+			}
+
+		case "ctrl+b":
+			// Full page up
+			if !m.searchMode && !m.confirmMode {
+				fullPage := m.getPageSize()
+				m.moveCursor(-fullPage)
+			}
+
 		case "backspace":
 			if m.searchMode && len(m.query) > 0 {
 				m.query = m.query[:len(m.query)-1]
@@ -321,7 +433,7 @@ func (m model) View() string {
 	// Header
 	header := headerStyle.Render(" gh-deps Interactive Mode ")
 	b.WriteString(header + "\n")
-	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search (Ctrl+J/K in search), o to open in browser, r to refresh, Enter to merge, q to quit") + "\n\n")
+	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, Ctrl+U/D (half page), Ctrl+F/B (full page), / to search (Ctrl+J/K in search), o to open in browser, r to refresh, Enter to merge, q to quit") + "\n\n")
 
 	// Search bar
 	if m.searchMode {
@@ -376,10 +488,22 @@ func (m model) View() string {
 		pr := m.filtered[i]
 		line := m.formatPRLine(i+1, pr)
 
+		_, isPolling := m.pollingRepos[pr.Repository]
+
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render("❯ " + line) + "\n")
+			if isPolling {
+				// Selected and polling: combine styles
+				b.WriteString(selectedStyle.Render("❯ ") + pollingStyle.Render(line) + "\n")
+			} else {
+				b.WriteString(selectedStyle.Render("❯ " + line) + "\n")
+			}
 		} else {
-			b.WriteString(normalStyle.Render("  " + line) + "\n")
+			if isPolling {
+				// Polling: dimmed style with icon
+				b.WriteString(pollingStyle.Render("  " + line) + "\n")
+			} else {
+				b.WriteString(normalStyle.Render("  " + line) + "\n")
+			}
 		}
 	}
 
@@ -387,7 +511,18 @@ func (m model) View() string {
 	if len(m.filtered) == 0 {
 		b.WriteString("\n" + dimStyle.Render("  No PRs match your filter") + "\n")
 	} else {
-		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  %d/%d PRs", m.cursor+1, len(m.filtered))) + "\n")
+		footer := fmt.Sprintf("  %d/%d PRs", m.cursor+1, len(m.filtered))
+
+		// Add polling indicator
+		if len(m.pollingRepos) > 0 {
+			pollingRepoNames := []string{}
+			for repo := range m.pollingRepos {
+				pollingRepoNames = append(pollingRepoNames, repo)
+			}
+			footer += fmt.Sprintf("  |  Polling: %s", strings.Join(pollingRepoNames, ", "))
+		}
+
+		b.WriteString("\n" + dimStyle.Render(footer) + "\n")
 	}
 
 	// Confirmation modal overlay
@@ -470,6 +605,12 @@ func (m model) formatPRLine(num int, pr models.PullRequest) string {
 	labels := formatLabels(pr.Labels, 15)
 	version := truncate(pr.Version, 12)
 
+	// Check if repository is being polled
+	pollingIcon := ""
+	if _, isPolling := m.pollingRepos[pr.Repository]; isPolling {
+		pollingIcon = "↻ "
+	}
+
 	// Calculate title width dynamically based on terminal width
 	// Fixed columns: # (4) + REPO (20) + BOT (12) + CI (4) + MERGE (6) + LABELS (15) + VERSION (12) = 73
 	// Add spaces between columns (~7) and margins (~10) = 90
@@ -481,15 +622,24 @@ func (m model) formatPRLine(num int, pr models.PullRequest) string {
 	// No maximum limit - use full terminal width
 	title := truncate(pr.Title, titleWidth)
 
-	return fmt.Sprintf("%-4d %-20s %-12s %-4s %-6s %-15s %-12s %s",
-		num, repo, bot, ci, merge, labels, version, title)
+	// Format: PR number with polling icon
+	prNumber := fmt.Sprintf("%s%-4d", pollingIcon, num)
+
+	return fmt.Sprintf("%-6s %-20s %-12s %-4s %-6s %-15s %-12s %s",
+		prNumber, repo, bot, ci, merge, labels, version, title)
 }
 
 // filterPRs filters PRs based on query
 func (m *model) filterPRs() {
 	if m.query == "" {
 		m.filtered = m.prs
-		m.cursor = 0
+		// Don't reset cursor to 0 - just adjust if out of bounds
+		if m.cursor >= len(m.filtered) {
+			m.cursor = len(m.filtered) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
 		return
 	}
 
@@ -613,6 +763,9 @@ func (m *model) rebasePR(pr models.PullRequest) tea.Cmd {
 
 // refreshPRs creates a command to refresh all PRs from API
 func (m *model) refreshPRs() tea.Cmd {
+	// Capture current selection before refresh
+	prevSelection := m.captureCurrentSelection()
+
 	return func() tea.Msg {
 		var prs []models.PullRequest
 		var err error
@@ -625,8 +778,9 @@ func (m *model) refreshPRs() tea.Cmd {
 		}
 
 		return refreshPRsMsg{
-			prs: prs,
-			err: err,
+			prs:           prs,
+			err:           err,
+			prevSelection: prevSelection,
 		}
 	}
 }
@@ -645,8 +799,22 @@ type rebaseResultMsg struct {
 
 // refreshPRsMsg represents the result of refreshing PRs
 type refreshPRsMsg struct {
-	prs []models.PullRequest
-	err error
+	prs           []models.PullRequest
+	err           error
+	prevSelection *PRIdentifier // Previous cursor selection to restore
+}
+
+// pollTimerMsg triggers a poll for a repository
+type pollTimerMsg struct {
+	repository string // Which repository triggered this timer
+}
+
+// pollResultMsg represents the result of polling a repository
+type pollResultMsg struct {
+	repository  string
+	prs         []models.PullRequest // Updated PRs for this repository
+	err         error
+	stopPolling bool // True if should stop polling (no PENDING PRs or max attempts)
 }
 
 // Helper functions
@@ -705,6 +873,211 @@ func openBrowser(url string) error {
 	return cmd.Start()
 }
 
+// moveCursor moves cursor by delta, keeping it within valid bounds
+func (m *model) moveCursor(delta int) {
+	m.cursor += delta
+
+	// Clamp to valid range
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(m.filtered) {
+		m.cursor = len(m.filtered) - 1
+	}
+	if m.cursor < 0 && len(m.filtered) == 0 {
+		m.cursor = 0
+	}
+}
+
+// getPageSize returns the current page size for navigation
+func (m *model) getPageSize() int {
+	maxVisible := m.height - 10
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
+	return maxVisible
+}
+
+// captureCurrentSelection saves the current cursor position as a PR identifier
+func (m *model) captureCurrentSelection() *PRIdentifier {
+	if len(m.filtered) > 0 && m.cursor >= 0 && m.cursor < len(m.filtered) {
+		pr := m.filtered[m.cursor]
+		return &PRIdentifier{
+			Repository: pr.Repository,
+			Number:     pr.Number,
+		}
+	}
+	return nil
+}
+
+// restoreCursorPosition finds the previously selected PR in the filtered list
+// and moves cursor to it. If not found, keeps current index or adjusts to valid range.
+func (m *model) restoreCursorPosition(prevSelection *PRIdentifier) {
+	if prevSelection == nil {
+		// No previous selection, keep current cursor or reset to 0
+		if m.cursor >= len(m.filtered) {
+			m.cursor = len(m.filtered) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		return
+	}
+
+	// Try to find the same PR in new filtered list
+	for i, pr := range m.filtered {
+		if pr.Repository == prevSelection.Repository && pr.Number == prevSelection.Number {
+			m.cursor = i
+			return
+		}
+	}
+
+	// PR not found (merged/deleted), adjust cursor to valid position
+	if m.cursor >= len(m.filtered) {
+		m.cursor = len(m.filtered) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}
+
+// startPolling initiates polling for a repository
+func (m *model) startPolling(repository string) tea.Cmd {
+	// Initialize or reset poll state
+	m.pollingRepos[repository] = &pollState{
+		repository:      repository,
+		backoffDuration: pollInitialBackoff,
+		attemptCount:    0,
+		lastPollTime:    time.Now(),
+		timerActive:     true,
+	}
+
+	// Start timer for first poll
+	return func() tea.Msg {
+		time.Sleep(pollInitialBackoff)
+		return pollTimerMsg{repository: repository}
+	}
+}
+
+// pollRepository fetches PRs for a repository and checks for PENDING status
+func (m *model) pollRepository(repository string) tea.Cmd {
+	return func() tea.Msg {
+		state, exists := m.pollingRepos[repository]
+		if !exists {
+			return pollResultMsg{
+				repository:  repository,
+				stopPolling: true,
+			}
+		}
+
+		// Parse repository
+		owner, repo, err := api.ParseRepository(repository)
+		if err != nil {
+			return pollResultMsg{
+				repository:  repository,
+				err:         err,
+				stopPolling: true,
+			}
+		}
+
+		// Fetch PRs for this repository
+		prs, err := m.client.FetchRepositoryPullRequests(m.ctx, owner, repo)
+		if err != nil {
+			return pollResultMsg{
+				repository:  repository,
+				err:         err,
+				stopPolling: false, // Don't stop on error, retry
+			}
+		}
+
+		// Check if any PENDING PRs exist
+		hasPending := false
+		for _, pr := range prs {
+			if pr.CheckSummary.Status == models.StatusPending {
+				hasPending = true
+				break
+			}
+		}
+
+		// Increment attempt count
+		state.attemptCount++
+
+		// Determine if we should stop polling
+		stopPolling := !hasPending || state.attemptCount >= pollMaxAttempts
+
+		return pollResultMsg{
+			repository:  repository,
+			prs:         prs,
+			err:         nil,
+			stopPolling: stopPolling,
+		}
+	}
+}
+
+// mergePolledPRs merges polled PRs into the existing PR list
+func (m *model) mergePolledPRs(newPRs []models.PullRequest) {
+	if len(newPRs) == 0 {
+		return
+	}
+
+	// Capture current cursor position before updating
+	prevSelection := m.captureCurrentSelection()
+
+	polledRepo := newPRs[0].Repository
+	polledNumbers := make(map[int]bool)
+	for _, pr := range newPRs {
+		polledNumbers[pr.Number] = true
+	}
+
+	// Update existing PRs and remove deleted ones from polled repository
+	filtered := []models.PullRequest{}
+	for _, existingPR := range m.prs {
+		if existingPR.Repository == polledRepo {
+			// Only keep if still in polled results
+			if polledNumbers[existingPR.Number] {
+				// Find and update with new data
+				for _, newPR := range newPRs {
+					if newPR.Number == existingPR.Number {
+						filtered = append(filtered, newPR)
+						break
+					}
+				}
+			}
+			// If not in polledNumbers, it was deleted - don't add
+		} else {
+			// Keep PRs from other repositories
+			filtered = append(filtered, existingPR)
+		}
+	}
+
+	// Add new PRs that weren't in the list
+	for _, newPR := range newPRs {
+		found := false
+		for _, existingPR := range m.prs {
+			if existingPR.Repository == newPR.Repository && existingPR.Number == newPR.Number {
+				found = true
+				break
+			}
+		}
+		if !found {
+			filtered = append(filtered, newPR)
+		}
+	}
+
+	m.prs = filtered
+
+	// Re-sort
+	sort.Slice(m.prs, func(i, j int) bool {
+		return m.prs[i].RepoName() < m.prs[j].RepoName()
+	})
+
+	// Re-apply filter
+	m.filterPRs()
+
+	// Restore cursor position after filtering
+	m.restoreCursorPosition(prevSelection)
+}
+
 // RunTUI starts the interactive TUI
 func RunTUI(ctx context.Context, prs []models.PullRequest, client *api.Client, target string, isOrg bool, limit int, verbose bool) error {
 	m := model{
@@ -719,6 +1092,7 @@ func RunTUI(ctx context.Context, prs []models.PullRequest, client *api.Client, t
 		verbose:        verbose,
 		width:          80,
 		height:         24,
+		pollingRepos:   make(map[string]*pollState),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
