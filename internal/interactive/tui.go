@@ -28,6 +28,11 @@ var (
 			Background(lipgloss.Color("235")).
 			Bold(true)
 
+	rebaseModalStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Background(lipgloss.Color("235")).
+			Bold(true)
+
 	normalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
 
@@ -435,7 +440,13 @@ func (m model) View() string {
 		modal.WriteString("╚═══════════════════════════════════════════════════════════════╝\n")
 
 		// Center the modal and overlay it on the screen
-		modalContent := selectedStyle.Render(modal.String())
+		// Use different style for rebase vs merge
+		var modalContent string
+		if m.confirmRebase {
+			modalContent = rebaseModalStyle.Render(modal.String())
+		} else {
+			modalContent = selectedStyle.Render(modal.String())
+		}
 		b.WriteString("\n" + modalContent)
 	}
 
