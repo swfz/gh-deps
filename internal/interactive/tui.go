@@ -3,6 +3,9 @@ package interactive
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -49,6 +52,7 @@ type model struct {
 	searchMode     bool                  // Whether in search mode
 	confirmMode    bool                  // Whether in confirmation mode
 	confirmingPR   *models.PullRequest   // PR being confirmed for merge
+	confirmRebase  bool                  // Whether confirming rebase instead of merge
 	client         *api.Client           // API client for merging
 	ctx            context.Context       // Context for API calls
 	target         string                // Target org/user for refresh
@@ -61,6 +65,7 @@ type model struct {
 	height         int                   // Terminal height
 	merging        bool                  // Whether currently merging
 	refreshing     bool                  // Whether currently refreshing PRs
+	rebasing       bool                  // Whether currently triggering rebase
 	done           bool                  // Whether to quit
 }
 
@@ -105,6 +110,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Refreshing PRs..."
 			m.messageType = ""
 			return m, m.refreshPRs()
+		} else {
+			m.messageType = "error"
+		}
+		return m, nil
+
+	case rebaseResultMsg:
+		m.rebasing = false
+		m.message = msg.message
+		if msg.success {
+			m.messageType = "success"
 		} else {
 			m.messageType = "error"
 		}
@@ -160,6 +175,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Cancel confirmation
 				m.confirmMode = false
 				m.confirmingPR = nil
+				m.confirmRebase = false
 				return m, nil
 			}
 			if m.searchMode {
@@ -187,17 +203,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "o":
+			// Open PR in browser - only if not in search/confirm mode
+			if !m.searchMode && !m.confirmMode && len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+				pr := m.filtered[m.cursor]
+				if err := openBrowser(pr.URL); err != nil {
+					m.message = fmt.Sprintf("Failed to open browser: %v", err)
+					m.messageType = "error"
+				} else {
+					m.message = fmt.Sprintf("Opened PR #%d in browser", pr.Number)
+					m.messageType = "success"
+				}
+			}
+			return m, nil
+
 		case "enter", "y":
 			if m.confirmMode {
-				// Confirm merge
-				if m.confirmingPR != nil && !m.merging {
-					m.merging = true
-					m.message = "Merging..."
-					m.messageType = ""
+				if m.confirmingPR != nil && !m.merging && !m.rebasing {
 					pr := *m.confirmingPR
 					m.confirmMode = false
 					m.confirmingPR = nil
-					return m, m.mergePR(pr)
+
+					// Check if we're in rebase mode
+					if m.confirmRebase {
+						m.rebasing = true
+						m.message = "Triggering rebase..."
+						m.messageType = ""
+						m.confirmRebase = false
+						return m, m.rebasePR(pr)
+					} else {
+						// Normal merge
+						m.merging = true
+						m.message = "Merging..."
+						m.messageType = ""
+						return m, m.mergePR(pr)
+					}
 				}
 				return m, nil
 			}
@@ -210,6 +250,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmMode = true
 				pr := m.filtered[m.cursor]
 				m.confirmingPR = &pr
+
+				// Determine if this should be a rebase or merge
+				// If PR has conflicts and bot supports rebase, offer rebase
+				if pr.MergeableState == models.MergeableStateConflicting && pr.BotType.SupportsRebase() {
+					m.confirmRebase = true
+				} else {
+					m.confirmRebase = false
+				}
 			}
 			return m, nil
 
@@ -218,6 +266,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Cancel confirmation
 				m.confirmMode = false
 				m.confirmingPR = nil
+				m.confirmRebase = false
 			}
 			return m, nil
 
@@ -259,7 +308,7 @@ func (m model) View() string {
 	// Header
 	header := headerStyle.Render(" gh-deps Interactive Mode ")
 	b.WriteString(header + "\n")
-	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search, r to refresh, Enter to merge, q to quit") + "\n\n")
+	b.WriteString(dimStyle.Render("  Use ↑/↓ or j/k to navigate, / to search, o to open in browser, r to refresh, Enter to merge, q to quit") + "\n\n")
 
 	// Search bar
 	if m.searchMode {
@@ -336,28 +385,53 @@ func (m model) View() string {
 		var modal strings.Builder
 		modal.WriteString("\n")
 		modal.WriteString("╔═══════════════════════════════════════════════════════════════╗\n")
-		modal.WriteString("║               CONFIRM MERGE                                   ║\n")
+
+		// Title changes based on rebase/merge mode
+		if m.confirmRebase {
+			modal.WriteString("║               TRIGGER REBASE                                  ║\n")
+		} else {
+			modal.WriteString("║               CONFIRM MERGE                                   ║\n")
+		}
+
 		modal.WriteString("╠═══════════════════════════════════════════════════════════════╣\n")
 		modal.WriteString(fmt.Sprintf("║ Repository: %-49s ║\n", pr.Repository))
 		modal.WriteString(fmt.Sprintf("║ PR Number:  #%-47d ║\n", pr.Number))
 		modal.WriteString(fmt.Sprintf("║ Title:      %-49s ║\n", truncate(pr.Title, 49)))
+		modal.WriteString(fmt.Sprintf("║ URL:        %-49s ║\n", truncate(pr.URL, 49)))
 		modal.WriteString(fmt.Sprintf("║ Bot:        %-49s ║\n", pr.BotType.DisplayName()))
 		modal.WriteString(fmt.Sprintf("║ Version:    %-49s ║\n", pr.Version))
 		modal.WriteString(fmt.Sprintf("║ CI Status:  %-49s ║\n", string(pr.CheckSummary.Status)))
 		modal.WriteString(fmt.Sprintf("║ Mergeable:  %-49s ║\n", formatMergeableState(pr.MergeableState)))
 		modal.WriteString("╠═══════════════════════════════════════════════════════════════╣\n")
 
-		// Show warnings
-		if pr.MergeableState == models.MergeableStateConflicting {
-			modal.WriteString("║ " + errorStyle.Render("⚠ WARNING: This PR has conflicts!") + strings.Repeat(" ", 29) + "║\n")
-		} else if pr.CheckSummary.Status == models.StatusFailure {
-			modal.WriteString("║ " + errorStyle.Render("⚠ WARNING: CI checks are failing!") + strings.Repeat(" ", 27) + "║\n")
-		} else if pr.CheckSummary.Status == models.StatusPending {
-			modal.WriteString("║ ⚠ WARNING: CI checks are pending" + strings.Repeat(" ", 29) + "║\n")
+		// Show warnings or info
+		if m.confirmRebase {
+			// Explain what will happen
+			if pr.BotType.UsesCheckboxRebase() {
+				modal.WriteString("║ This will check the rebase checkbox in the PR body.          ║\n")
+			} else if pr.BotType.RebaseCommand() != "" {
+				modal.WriteString(fmt.Sprintf("║ This will post: %-44s ║\n", pr.BotType.RebaseCommand()))
+			}
+		} else {
+			// Show warnings for merge
+			if pr.MergeableState == models.MergeableStateConflicting {
+				modal.WriteString("║ " + errorStyle.Render("⚠ WARNING: This PR has conflicts!") + strings.Repeat(" ", 29) + "║\n")
+			} else if pr.CheckSummary.Status == models.StatusFailure {
+				modal.WriteString("║ " + errorStyle.Render("⚠ WARNING: CI checks are failing!") + strings.Repeat(" ", 27) + "║\n")
+			} else if pr.CheckSummary.Status == models.StatusPending {
+				modal.WriteString("║ ⚠ WARNING: CI checks are pending" + strings.Repeat(" ", 29) + "║\n")
+			}
 		}
 
 		modal.WriteString("║                                                               ║\n")
-		modal.WriteString("║ Merge this PR? (y/n or Esc to cancel)                        ║\n")
+
+		// Prompt changes based on rebase/merge mode
+		if m.confirmRebase {
+			modal.WriteString("║ Trigger rebase? (y/n or Esc to cancel)                       ║\n")
+		} else {
+			modal.WriteString("║ Merge this PR? (y/n or Esc to cancel)                        ║\n")
+		}
+
 		modal.WriteString("╚═══════════════════════════════════════════════════════════════╝\n")
 
 		// Center the modal and overlay it on the screen
@@ -466,6 +540,58 @@ func (m *model) mergePR(pr models.PullRequest) tea.Cmd {
 	}
 }
 
+// rebasePR creates a command to trigger a rebase for the selected PR
+func (m *model) rebasePR(pr models.PullRequest) tea.Cmd {
+	return func() tea.Msg {
+		// Parse repository
+		owner, repo, err := api.ParseRepository(pr.Repository)
+		if err != nil {
+			return rebaseResultMsg{
+				success: false,
+				message: fmt.Sprintf("Invalid repository format: %v", err),
+			}
+		}
+
+		// Handle based on bot type
+		if pr.BotType.UsesCheckboxRebase() {
+			// Renovate: Update PR body to check the rebase checkbox
+			err := m.client.TriggerRenovateRebase(m.ctx, owner, repo, pr.Number, pr.Body)
+			if err != nil {
+				return rebaseResultMsg{
+					success: false,
+					message: fmt.Sprintf("Failed to trigger rebase: %v", err),
+				}
+			}
+
+			return rebaseResultMsg{
+				success: true,
+				message: fmt.Sprintf("Rebase triggered for PR #%d in %s (checkbox checked)", pr.Number, pr.Repository),
+			}
+		} else if pr.BotType.RebaseCommand() != "" {
+			// Dependabot: Post a comment
+			comment := pr.BotType.RebaseCommand()
+			_, err := m.client.CreateComment(m.ctx, owner, repo, pr.Number, comment)
+			if err != nil {
+				return rebaseResultMsg{
+					success: false,
+					message: fmt.Sprintf("Failed to post rebase comment: %v", err),
+				}
+			}
+
+			return rebaseResultMsg{
+				success: true,
+				message: fmt.Sprintf("Rebase triggered for PR #%d in %s (comment posted)", pr.Number, pr.Repository),
+			}
+		}
+
+		// This shouldn't happen as we check SupportsRebase before calling this
+		return rebaseResultMsg{
+			success: false,
+			message: fmt.Sprintf("Bot %s does not support rebase", pr.BotType.DisplayName()),
+		}
+	}
+}
+
 // refreshPRs creates a command to refresh all PRs from API
 func (m *model) refreshPRs() tea.Cmd {
 	return func() tea.Msg {
@@ -488,6 +614,12 @@ func (m *model) refreshPRs() tea.Cmd {
 
 // mergeResultMsg represents the result of a merge operation
 type mergeResultMsg struct {
+	success bool
+	message string
+}
+
+// rebaseResultMsg represents the result of a rebase trigger operation
+type rebaseResultMsg struct {
 	success bool
 	message string
 }
@@ -528,6 +660,30 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// openBrowser opens the given URL in the default browser
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+
+	// Check BROWSER environment variable first
+	if browser := os.Getenv("BROWSER"); browser != "" {
+		cmd = exec.Command(browser, url)
+	} else {
+		// Fallback to OS-specific defaults
+		switch runtime.GOOS {
+		case "linux":
+			cmd = exec.Command("xdg-open", url)
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("cmd", "/c", "start", url)
+		default:
+			return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+		}
+	}
+
+	return cmd.Start()
 }
 
 // RunTUI starts the interactive TUI
