@@ -68,3 +68,8 @@ type UserRepositoriesQuery struct {
 		} `graphql:"repositories(first: 50, after: $cursor)"`
 	} `graphql:"user(login: $userName)"`
 }
+
+// RepositoryPRsQuery represents the GraphQL query for a single repository's PRs
+type RepositoryPRsQuery struct {
+	Repository RepositoryNode `graphql:"repository(owner: $owner, name: $repo)"`
+}

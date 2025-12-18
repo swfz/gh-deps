@@ -139,6 +139,30 @@ func (c *Client) FetchUserPullRequests(ctx context.Context, userName string, lim
 	return allPRs, nil
 }
 
+// FetchRepositoryPullRequests fetches PRs for a specific repository
+func (c *Client) FetchRepositoryPullRequests(ctx context.Context, owner, repo string) ([]models.PullRequest, error) {
+	// Wait for rate limiter
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	var query RepositoryPRsQuery
+
+	variables := map[string]interface{}{
+		"owner": graphql.String(owner),
+		"repo":  graphql.String(repo),
+	}
+
+	if err := c.graphqlClient.Query(ctx, &query, variables); err != nil {
+		return nil, fmt.Errorf("GraphQL query failed: %w", err)
+	}
+
+	// Process PRs from the repository
+	prs := c.processPRsFromRepo(ctx, query.Repository, c.verbose)
+
+	return prs, nil
+}
+
 // processPRsFromRepo extracts and filters PRs from a repository
 func (c *Client) processPRsFromRepo(ctx context.Context, repo RepositoryNode, verbose bool) []models.PullRequest {
 	var prs []models.PullRequest
