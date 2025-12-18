@@ -61,10 +61,11 @@ type PRIdentifier struct {
 
 // Polling constants
 const (
-	pollInitialBackoff = 2 * time.Second
-	pollMaxBackoff     = 30 * time.Second
-	pollMultiplier     = 2.0
-	pollMaxAttempts    = 10
+	pollInitialBackoff       = 2 * time.Second  // Initial backoff after merge
+	pollRebaseInitialBackoff = 20 * time.Second // Initial backoff after rebase (CI takes longer to restart)
+	pollMaxBackoff           = 30 * time.Second
+	pollMultiplier           = 2.0
+	pollMaxAttempts          = 10
 )
 
 // pollState tracks the polling state for a repository
@@ -152,7 +153,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if mergedRepo != "" {
 				return m, tea.Batch(
 					m.refreshPRs(),
-					m.startPolling(mergedRepo),
+					m.startPolling(mergedRepo, pollInitialBackoff),
 				)
 			}
 
@@ -167,6 +168,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = msg.message
 		if msg.success {
 			m.messageType = "success"
+
+			// Start polling the rebased repository with longer initial delay
+			// (CI takes longer to restart after rebase)
+			if msg.repository != "" {
+				return m, m.startPolling(msg.repository, pollRebaseInitialBackoff)
+			}
 		} else {
 			m.messageType = "error"
 		}
@@ -713,8 +720,9 @@ func (m *model) rebasePR(pr models.PullRequest) tea.Cmd {
 		owner, repo, err := api.ParseRepository(pr.Repository)
 		if err != nil {
 			return rebaseResultMsg{
-				success: false,
-				message: fmt.Sprintf("Invalid repository format: %v", err),
+				success:    false,
+				message:    fmt.Sprintf("Invalid repository format: %v", err),
+				repository: pr.Repository,
 			}
 		}
 
@@ -724,14 +732,16 @@ func (m *model) rebasePR(pr models.PullRequest) tea.Cmd {
 			err := m.client.TriggerRenovateRebase(m.ctx, owner, repo, pr.Number, pr.Body)
 			if err != nil {
 				return rebaseResultMsg{
-					success: false,
-					message: fmt.Sprintf("Failed to trigger rebase: %v", err),
+					success:    false,
+					message:    fmt.Sprintf("Failed to trigger rebase: %v", err),
+					repository: pr.Repository,
 				}
 			}
 
 			return rebaseResultMsg{
-				success: true,
-				message: fmt.Sprintf("Rebase triggered for PR #%d in %s (checkbox checked)", pr.Number, pr.Repository),
+				success:    true,
+				message:    fmt.Sprintf("Rebase triggered for PR #%d in %s (checkbox checked)", pr.Number, pr.Repository),
+				repository: pr.Repository,
 			}
 		} else if pr.BotType.RebaseCommand() != "" {
 			// Dependabot: Post a comment
@@ -739,21 +749,24 @@ func (m *model) rebasePR(pr models.PullRequest) tea.Cmd {
 			_, err := m.client.CreateComment(m.ctx, owner, repo, pr.Number, comment)
 			if err != nil {
 				return rebaseResultMsg{
-					success: false,
-					message: fmt.Sprintf("Failed to post rebase comment: %v", err),
+					success:    false,
+					message:    fmt.Sprintf("Failed to post rebase comment: %v", err),
+					repository: pr.Repository,
 				}
 			}
 
 			return rebaseResultMsg{
-				success: true,
-				message: fmt.Sprintf("Rebase triggered for PR #%d in %s (comment posted)", pr.Number, pr.Repository),
+				success:    true,
+				message:    fmt.Sprintf("Rebase triggered for PR #%d in %s (comment posted)", pr.Number, pr.Repository),
+				repository: pr.Repository,
 			}
 		}
 
 		// This shouldn't happen as we check SupportsRebase before calling this
 		return rebaseResultMsg{
-			success: false,
-			message: fmt.Sprintf("Bot %s does not support rebase", pr.BotType.DisplayName()),
+			success:    false,
+			message:    fmt.Sprintf("Bot %s does not support rebase", pr.BotType.DisplayName()),
+			repository: pr.Repository,
 		}
 	}
 }
@@ -790,8 +803,9 @@ type mergeResultMsg struct {
 
 // rebaseResultMsg represents the result of a rebase trigger operation
 type rebaseResultMsg struct {
-	success bool
-	message string
+	success    bool
+	message    string
+	repository string // Repository that was rebased
 }
 
 // refreshPRsMsg represents the result of refreshing PRs
@@ -938,12 +952,12 @@ func (m *model) restoreCursorPosition(prevSelection *PRIdentifier) {
 	}
 }
 
-// startPolling initiates polling for a repository
-func (m *model) startPolling(repository string) tea.Cmd {
+// startPolling initiates polling for a repository with custom initial backoff
+func (m *model) startPolling(repository string, initialBackoff time.Duration) tea.Cmd {
 	// Initialize or reset poll state
 	m.pollingRepos[repository] = &pollState{
 		repository:      repository,
-		backoffDuration: pollInitialBackoff,
+		backoffDuration: initialBackoff,
 		attemptCount:    0,
 		lastPollTime:    time.Now(),
 		timerActive:     true,
@@ -951,7 +965,7 @@ func (m *model) startPolling(repository string) tea.Cmd {
 
 	// Start timer for first poll
 	return func() tea.Msg {
-		time.Sleep(pollInitialBackoff)
+		time.Sleep(initialBackoff)
 		return pollTimerMsg{repository: repository}
 	}
 }
