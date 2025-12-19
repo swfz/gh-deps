@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -17,15 +18,16 @@ import (
 
 // Client wraps GitHub API client with rate limiting
 type Client struct {
-	graphqlClient *graphql.Client
-	httpClient    *http.Client
-	rateLimiter   *rate.Limiter
-	verbose       bool
-	skipChecks    bool
+	graphqlClient       *graphql.Client
+	httpClient          *http.Client
+	rateLimiter         *rate.Limiter
+	verbose             bool
+	skipChecks          bool
+	excludeRepositories map[string]bool
 }
 
 // NewClient creates a new GitHub API client using gh CLI authentication
-func NewClient(verbose bool, skipChecks bool) (*Client, error) {
+func NewClient(verbose bool, skipChecks bool, excludeRepositories []string, target string, isOrganization bool) (*Client, error) {
 	// Use gh CLI's authentication
 	httpClient, err := api.DefaultHTTPClient()
 	if err != nil {
@@ -38,12 +40,27 @@ func NewClient(verbose bool, skipChecks bool) (*Client, error) {
 	// Rate limiter: 5000 requests per hour = ~1.4 per second, use 1 per second to be safe
 	rateLimiter := rate.NewLimiter(rate.Every(time.Second), 10)
 
+	// Convert excluded repositories list to map for efficient lookup
+	// For user mode, normalize repo names to include the user prefix
+	excludeMap := make(map[string]bool)
+	for _, repo := range excludeRepositories {
+		if !isOrganization && !strings.Contains(repo, "/") {
+			// User mode: add user prefix if not already present
+			excludeMap[target+"/"+repo] = true
+			// Also add the bare name for matching
+			excludeMap[repo] = true
+		} else {
+			excludeMap[repo] = true
+		}
+	}
+
 	return &Client{
-		graphqlClient: graphqlClient,
-		httpClient:    httpClient,
-		rateLimiter:   rateLimiter,
-		verbose:       verbose,
-		skipChecks:    skipChecks,
+		graphqlClient:       graphqlClient,
+		httpClient:          httpClient,
+		rateLimiter:         rateLimiter,
+		verbose:             verbose,
+		skipChecks:          skipChecks,
+		excludeRepositories: excludeMap,
 	}, nil
 }
 
@@ -71,6 +88,14 @@ func (c *Client) FetchOrgPullRequests(ctx context.Context, orgName string, limit
 
 		// Process repositories and PRs
 		for _, repo := range query.Organization.Repositories.Nodes {
+			// Skip excluded repositories
+			if c.excludeRepositories[repo.NameWithOwner] {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Skipping excluded repository: %s\n", repo.NameWithOwner)
+				}
+				continue
+			}
+
 			prs := c.processPRsFromRepo(ctx, repo, c.verbose)
 			allPRs = append(allPRs, prs...)
 
@@ -117,6 +142,14 @@ func (c *Client) FetchUserPullRequests(ctx context.Context, userName string, lim
 
 		// Process repositories and PRs
 		for _, repo := range query.User.Repositories.Nodes {
+			// Skip excluded repositories
+			if c.excludeRepositories[repo.NameWithOwner] {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Skipping excluded repository: %s\n", repo.NameWithOwner)
+				}
+				continue
+			}
+
 			prs := c.processPRsFromRepo(ctx, repo, c.verbose)
 			allPRs = append(allPRs, prs...)
 

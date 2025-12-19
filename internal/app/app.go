@@ -18,7 +18,7 @@ type App struct {
 
 // New creates a new application instance
 func New(config *Config) (*App, error) {
-	client, err := api.NewClient(config.Verbose, config.SkipChecks)
+	client, err := api.NewClient(config.Verbose, config.SkipChecks, config.ExcludeRepositories, config.Target, config.IsOrganization)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}

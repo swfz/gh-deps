@@ -3,21 +3,23 @@ package app
 import (
 	"errors"
 	"flag"
+	"strings"
 )
 
 // Config holds the application configuration
 type Config struct {
-	Target         string // Organization or user name
-	IsOrganization bool   // True if targeting an organization, false for user
-	Verbose        bool   // Enable verbose output
-	Limit          int    // Maximum PRs to display (0 = unlimited)
-	SkipChecks     bool   // Skip fetching check runs
-	Interactive    bool   // Enable interactive PR merge mode
+	Target             string   // Organization or user name
+	IsOrganization     bool     // True if targeting an organization, false for user
+	Verbose            bool     // Enable verbose output
+	Limit              int      // Maximum PRs to display (0 = unlimited)
+	SkipChecks         bool     // Skip fetching check runs
+	Interactive        bool     // Enable interactive PR merge mode
+	ExcludeRepositories []string // Repositories to exclude (comma-separated list)
 }
 
 // ParseConfig parses command-line flags and validates configuration
 func ParseConfig() (*Config, error) {
-	var org, user string
+	var org, user, exclude string
 
 	flag.StringVar(&org, "org", "", "GitHub organization name")
 	flag.StringVar(&user, "user", "", "GitHub user name")
@@ -30,6 +32,7 @@ func ParseConfig() (*Config, error) {
 	flag.BoolVar(&config.SkipChecks, "skip-checks", false, "Skip fetching CI check runs")
 	flag.BoolVar(&config.Interactive, "interactive", false, "Enable interactive PR merge mode")
 	flag.BoolVar(&config.Interactive, "i", false, "Enable interactive mode (shorthand)")
+	flag.StringVar(&exclude, "exclude", "", "Comma-separated list of repositories to exclude (e.g., owner/repo1,owner/repo2)")
 
 	flag.Parse()
 
@@ -54,6 +57,17 @@ func ParseConfig() (*Config, error) {
 	} else {
 		config.Target = user
 		config.IsOrganization = false
+	}
+
+	// Parse excluded repositories
+	if exclude != "" {
+		repos := strings.Split(exclude, ",")
+		for _, repo := range repos {
+			trimmed := strings.TrimSpace(repo)
+			if trimmed != "" {
+				config.ExcludeRepositories = append(config.ExcludeRepositories, trimmed)
+			}
+		}
 	}
 
 	return config, nil
