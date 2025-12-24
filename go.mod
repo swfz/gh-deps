@@ -1,6 +1,6 @@
 module github.com/swfz/gh-deps
 
-go 1.25.5
+go 1.25
 
 require (
 	github.com/cli/go-gh/v2 v2.11.2
