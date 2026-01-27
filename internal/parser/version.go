@@ -12,8 +12,8 @@ var (
 	// Dependabot format: "from 1.0.0 to 1.1.0"
 	dependabotRegex = regexp.MustCompile(`from\s+([^\s]+)\s+to\s+([^\s]+)`)
 
-	// Renovate format: "1.0.0 -> 1.1.0" or "`1.0.0` -> `1.1.0`"
-	renovateRegex = regexp.MustCompile("`?([^`\\s]+)`?\\s+->\\s+`?([^`\\s]+)`?")
+	// Renovate format: "1.0.0 -> 1.1.0" or "`1.0.0` -> `1.1.0`" or "`1.0.0` → `1.1.0`"
+	renovateRegex = regexp.MustCompile("`?([^`\\s]+)`?\\s+(?:->|→)\\s+`?([^`\\s]+)`?")
 )
 
 // ExtractVersion extracts version information from PR body based on bot type
