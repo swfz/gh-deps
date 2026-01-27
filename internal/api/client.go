@@ -41,15 +41,16 @@ func NewClient(verbose bool, skipChecks bool, excludeRepositories []string, targ
 	rateLimiter := rate.NewLimiter(rate.Every(time.Second), 10)
 
 	// Convert excluded repositories list to map for efficient lookup
-	// For user mode, normalize repo names to include the user prefix
+	// Normalize repo names: short form (reponame) gets target prefix, full form (owner/repo) used as-is
 	excludeMap := make(map[string]bool)
 	for _, repo := range excludeRepositories {
-		if !isOrganization && !strings.Contains(repo, "/") {
-			// User mode: add user prefix if not already present
-			excludeMap[target+"/"+repo] = true
-			// Also add the bare name for matching
+		if strings.Contains(repo, "/") {
+			// Full format (owner/repo): use as-is to support excluding repos from other orgs
 			excludeMap[repo] = true
 		} else {
+			// Short format (reponame): add target prefix (org or user)
+			excludeMap[target+"/"+repo] = true
+			// Also add the bare name for backward compatibility
 			excludeMap[repo] = true
 		}
 	}
