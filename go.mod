@@ -3,7 +3,9 @@ module github.com/swfz/gh-deps
 go 1.25
 
 require (
-	github.com/cli/go-gh/v2 v2.11.2
+	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/charmbracelet/lipgloss v1.1.1-0.20250319133953-166f707985bc
+	github.com/cli/go-gh/v2 v2.12.1
 	github.com/olekukonko/tablewriter v1.1.2
 	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
 	golang.org/x/time v0.14.0
@@ -11,9 +13,7 @@ require (
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
-	github.com/charmbracelet/bubbletea v1.3.10 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
-	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/x/ansi v0.10.1 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.13 // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
