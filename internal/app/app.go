@@ -34,8 +34,14 @@ func (a *App) Run(ctx context.Context) error {
 	var prs []models.PullRequest
 	var err error
 
-	// Fetch PRs based on target type (org vs user)
-	if a.config.IsOrganization {
+	// Fetch PRs based on mode
+	if len(a.config.Repositories) > 0 {
+		// Fetch PRs from specific repositories
+		if a.config.Verbose {
+			fmt.Printf("Fetching dependency PRs from specific repositories: %v\n", a.config.Repositories)
+		}
+		prs, err = a.fetchSpecificRepositories(ctx)
+	} else if a.config.IsOrganization {
 		if a.config.Verbose {
 			limitMsg := "all PRs"
 			if a.config.Limit > 0 {
@@ -88,4 +94,36 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// fetchSpecificRepositories fetches PRs from the repositories specified by --repo.
+// Note: archived repositories are not filtered here because explicitly specifying
+// a repository via --repo is treated as an intentional user choice.
+func (a *App) fetchSpecificRepositories(ctx context.Context) ([]models.PullRequest, error) {
+	var allPRs []models.PullRequest
+
+	for _, repo := range a.config.Repositories {
+		owner, name, err := api.ParseRepository(repo)
+		if err != nil {
+			// Short format (reponame): use target as owner
+			owner = a.config.Target
+			name = repo
+		}
+
+		if a.config.Verbose {
+			fmt.Printf("Fetching dependency PRs from repository: %s/%s\n", owner, name)
+		}
+
+		prs, err := a.client.FetchRepositoryPullRequests(ctx, owner, name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch PRs from %s/%s: %w", owner, name, err)
+		}
+		allPRs = append(allPRs, prs...)
+
+		if a.config.Limit > 0 && len(allPRs) >= a.config.Limit {
+			return allPRs[:a.config.Limit], nil
+		}
+	}
+
+	return allPRs, nil
 }
