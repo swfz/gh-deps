@@ -52,7 +52,7 @@ type OrgRepositoriesQuery struct {
 				EndCursor   string
 			}
 			Nodes []RepositoryNode
-		} `graphql:"repositories(first: 50, after: $cursor)"`
+		} `graphql:"repositories(first: 50, after: $cursor, isArchived: false)"`
 	} `graphql:"organization(login: $orgName)"`
 }
 
@@ -65,7 +65,7 @@ type UserRepositoriesQuery struct {
 				EndCursor   string
 			}
 			Nodes []RepositoryNode
-		} `graphql:"repositories(first: 50, after: $cursor)"`
+		} `graphql:"repositories(first: 50, after: $cursor, isArchived: false)"`
 	} `graphql:"user(login: $userName)"`
 }
 
