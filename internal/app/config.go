@@ -15,11 +15,12 @@ type Config struct {
 	SkipChecks         bool     // Skip fetching check runs
 	Interactive        bool     // Enable interactive PR merge mode
 	ExcludeRepositories []string // Repositories to exclude (comma-separated list)
+	Repositories       []string // Specific repositories to include (comma-separated list)
 }
 
 // ParseConfig parses command-line flags and validates configuration
 func ParseConfig() (*Config, error) {
-	var org, user, exclude string
+	var org, user, exclude, repo string
 
 	flag.StringVar(&org, "org", "", "GitHub organization name")
 	flag.StringVar(&user, "user", "", "GitHub user name")
@@ -33,6 +34,7 @@ func ParseConfig() (*Config, error) {
 	flag.BoolVar(&config.Interactive, "interactive", false, "Enable interactive PR merge mode")
 	flag.BoolVar(&config.Interactive, "i", false, "Enable interactive mode (shorthand)")
 	flag.StringVar(&exclude, "exclude", "", "Comma-separated list of repositories to exclude (e.g., owner/repo1,owner/repo2)")
+	flag.StringVar(&repo, "repo", "", "Comma-separated list of specific repositories to check (e.g., owner/repo1,owner/repo2)")
 
 	flag.Parse()
 
@@ -59,16 +61,27 @@ func ParseConfig() (*Config, error) {
 		config.IsOrganization = false
 	}
 
-	// Parse excluded repositories
-	if exclude != "" {
-		repos := strings.Split(exclude, ",")
-		for _, repo := range repos {
-			trimmed := strings.TrimSpace(repo)
-			if trimmed != "" {
-				config.ExcludeRepositories = append(config.ExcludeRepositories, trimmed)
-			}
-		}
+	// Validate that --exclude and --repo are not both specified
+	if exclude != "" && repo != "" {
+		return nil, errors.New("cannot specify both --exclude and --repo")
 	}
 
+	config.ExcludeRepositories = splitCSV(exclude)
+	config.Repositories = splitCSV(repo)
+
 	return config, nil
+}
+
+// splitCSV splits a comma-separated string into trimmed, non-empty values
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var result []string
+	for _, item := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
