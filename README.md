@@ -17,7 +17,8 @@ When managing multiple repositories, dependency update bots like Renovate and De
 - Shows merge state (✓ mergeable, ✗ conflicting, ? unknown)
 - Displays PR labels
 - Extracts and shows version changes (e.g., "1.0.0 -> 1.1.0")
-- Excludes specific repositories from results
+- Automatically excludes archived repositories
+- Targets specific repositories or excludes specific repositories from results
 - Limits the number of displayed PRs
 - Clean table format optimized for terminal viewing
 - Uses GitHub GraphQL API for efficient data fetching
@@ -71,11 +72,19 @@ gh deps --org <organization-name> --limit 100
 gh deps --org <organization-name> --skip-checks
 ```
 
+### Specify target repositories
+
+```bash
+gh deps --org <organization-name> --repo repo1,repo2
+```
+
 ### Exclude specific repositories
 
 ```bash
 gh deps --org <organization-name> --exclude repo1,repo2
 ```
+
+`--repo` と `--exclude` は同時に指定できません。
 
 ### Enable verbose output
 
@@ -101,6 +110,7 @@ gh deps --org <organization-name> --interactive
 | `--limit` | `-l` | Max PRs to display (0 = unlimited) | `50` |
 | `--skip-checks` | | Skip fetching CI check runs | `false` |
 | `--interactive` | `-i` | Enable interactive mode | `false` |
+| `--repo` | | Comma-separated repos to check | |
 | `--exclude` | | Comma-separated repos to exclude | |
 
 `--org` と `--user` はどちらか一方を必ず指定する必要があります。
@@ -315,7 +325,7 @@ gh-deps/
 
 ## Limitations
 
-- Only shows open (unmerged/unclosed) PRs
+- Only shows open (unmerged/unclosed) PRs from non-archived repositories
 - Rate limited to GitHub API limits (typically 5,000 req/hour)
 - Default display limit is 50 PRs (configurable with `--limit`)
 
