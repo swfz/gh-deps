@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250319133953-166f707985bc
 	github.com/cli/go-gh/v2 v2.12.1
 	github.com/olekukonko/tablewriter v1.1.2
-	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
+	github.com/shurcooL/graphql v0.0.0-20240915155400-7ee5256398cf
 	golang.org/x/time v0.14.0
 )
 
