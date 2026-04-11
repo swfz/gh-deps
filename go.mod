@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
-	github.com/charmbracelet/lipgloss v1.1.1-0.20250319133953-166f707985bc
+	github.com/charmbracelet/lipgloss/v2 v2.0.2
 	github.com/cli/go-gh/v2 v2.12.1
 	github.com/olekukonko/tablewriter v1.1.2
 	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
