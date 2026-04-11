@@ -1,6 +1,6 @@
 module github.com/swfz/gh-deps
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -8,7 +8,7 @@ require (
 	github.com/cli/go-gh/v2 v2.12.1
 	github.com/olekukonko/tablewriter v1.1.2
 	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.15.0
 )
 
 require (
