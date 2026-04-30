@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/swfz/gh-deps/internal/api"
 	"github.com/swfz/gh-deps/internal/models"
 )
@@ -251,7 +251,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return pollTimerMsg{repository: msg.repository}
 		}
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Clear message on any key press (except in confirm mode)
 		if m.message != "" && !m.confirmMode {
 			m.message = ""
@@ -427,9 +427,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the UI
-func (m model) View() string {
+func (m model) View() tea.View {
 	if m.done {
-		return "Exiting...\n"
+		v := tea.NewView("Exiting...\n")
+		return v
 	}
 
 	var b strings.Builder
@@ -597,7 +598,9 @@ func (m model) View() string {
 		b.WriteString("\n" + modalContent)
 	}
 
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	return v
 }
 
 // formatPRLine formats a single PR line for display
@@ -1106,7 +1109,7 @@ func RunTUI(ctx context.Context, prs []models.PullRequest, client *api.Client, t
 		pollingRepos:   make(map[string]*pollState),
 	}
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("error running TUI: %w", err)
 	}
