@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/cli/go-gh/v2 v2.16.0
+	github.com/cli/go-gh/v2 v2.16.1
 	github.com/olekukonko/tablewriter v1.1.4
 	github.com/shurcooL/graphql v0.0.0-20240915155400-7ee5256398cf
 	golang.org/x/time v0.16.0
