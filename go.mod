@@ -3,7 +3,7 @@ module github.com/swfz/gh-deps
 go 1.26.7
 
 require (
-	charm.land/bubbletea/v2 v2.1.1
+	charm.land/bubbletea/v2 v2.1.2
 	charm.land/lipgloss/v2 v2.1.1
 	github.com/cli/go-gh/v2 v2.17.0
 	github.com/olekukonko/tablewriter v1.1.5
